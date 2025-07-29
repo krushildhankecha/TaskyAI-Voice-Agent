@@ -54,7 +54,7 @@ pylibsrtp==0.12.0
 # Remove pyobjc packages for Linux deployment
 python-dateutil==2.9.0.post0
 pytz==2025.1
-referencing==0.37.0
+referencing
 regex==2025.1.25
 requests==2.32.3
 rpds-py==0.25.0
