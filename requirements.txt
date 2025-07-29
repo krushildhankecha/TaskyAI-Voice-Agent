@@ -1,0 +1,5 @@
+openai
+torch
+pyttsx3
+httpx
+python-dotenv
