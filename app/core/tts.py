@@ -1,9 +1,15 @@
-import pyttsx3
+from gtts import gTTS
+import uuid
+import os
 
-engine = pyttsx3.init()
-engine.setProperty('rate', 150)  # Speed
+def ensure_dir(path):
+    os.makedirs(path, exist_ok=True)
 
-def speak(text):
-    print("🔊 Speaking:", text)
-    engine.say(text)
-    engine.runAndWait()
+
+def speak(text: str) -> str:
+    ensure_dir("outputs/tts_audio")
+    filename = f"outputs/tts_audio/{uuid.uuid4().hex}.mp3"
+    tts = gTTS(text)
+    tts.save(filename)
+    print(f"✅ TTS saved at {filename}")
+    return filename
