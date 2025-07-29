@@ -3,3 +3,6 @@ torch
 pyttsx3
 httpx
 python-dotenv
+streamlit
+streamlit-webrtc
+soundfile

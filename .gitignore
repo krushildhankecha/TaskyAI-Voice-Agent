@@ -1,5 +1,6 @@
 __pycache__
 __init__.py
+.env
 *.pyc
 data
-.env
+outputs
