@@ -39,6 +39,29 @@ class AudioRecorder(AudioProcessorBase):
 def main():
     st.write("🎤 Press **Start Listening** to begin and **Stop & Process** to get response.")
 
+    st.set_page_config(page_title="Tasky Voice AI", page_icon="🎤")
+    st.title("🎙️ TaskyAI Voice Assistant")
+
+    # 🔐 API Key Input
+    if "groq_api_key" not in st.session_state:
+        st.session_state.groq_api_key = ""
+
+    st.session_state.groq_api_key = st.text_input(
+        "🔑 Enter your Groq API Key",
+        type="password",
+        value=st.session_state.groq_api_key,
+        placeholder="Enter your Groq API key...",
+    )
+
+    if st.checkbox("📄 Show transcript and response"):
+        st.markdown(f"**Transcript:** {transcript}")
+        st.markdown(f"**Response:** {response}")
+
+
+    if not st.session_state.groq_api_key:
+        st.warning("Please enter your Groq API key to continue.")
+        return
+
     # Start Listening Button
     if st.button("▶️ Start Listening"):
         st.session_state.recording = True
@@ -79,12 +102,12 @@ def main():
             # ---------------- Whisper Transcription ----------------
             logging.info("🔠 Transcribing with Whisper...")
             # transcript = transcribe_audio(temp_wav.name)
-            transcript = transcribe_audio("/Users/krushildhankecha/Desktop/Projects/TaskyAI-Voice-Agent/app/data/tell_me_some.mp3")
+            transcript = transcribe_audio(temp_wav.name)
             logging.info(f"📝 Transcript: {transcript}")
 
             # ---------------- Assistant Logic ----------------
             logging.info("🧠 Running assistant logic...")
-            response = perform_action(transcript)
+            response = perform_action(transcript, api_key=st.session_state.groq_api_key)
             logging.info(f"💬 Assistant response: {response}")
 
             # ---------------- TTS Output ----------------
@@ -92,12 +115,14 @@ def main():
             tts_path = speak(response)
             logging.info(f"✅ TTS saved at {tts_path}")
 
-            if tts_path:
+            if tts_path and os.path.exists(tts_path):
                 st.audio(tts_path, format="audio/mp3")
 
-                # Optional: allow user to download
                 with open(tts_path, "rb") as f:
                     st.download_button("🔽 Download Response Audio", f, file_name=os.path.basename(tts_path))
+            else:
+                st.error("TTS generation failed or file not found.")
+
 
 if __name__ == "__main__":
     main()
