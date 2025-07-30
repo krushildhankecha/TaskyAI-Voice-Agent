@@ -3,9 +3,11 @@ from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
 import av
 import soundfile as sf
 import tempfile
-import os
+import os, time
 import numpy as np
 import logging
+import wave
+import shutil
 
 # Your core logic imports
 from app.core.stt import transcribe_audio
@@ -25,15 +27,19 @@ if "audio_file" not in st.session_state:
 
 
 class AudioRecorder(AudioProcessorBase):
-    def __init__(self) -> None:
+    def __init__(self):
         self.frames = []
         self.sample_rate = None
 
     def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        pcm = frame.to_ndarray()
+        pcm = frame.to_ndarray()  # shape: (channels, samples)
         self.sample_rate = frame.sample_rate
-        self.frames.append(pcm.T)
+        # Convert to mono by averaging channels if stereo
+        if pcm.shape[0] > 1:
+            pcm = np.mean(pcm, axis=0, dtype=np.int16, keepdims=True)
+        self.frames.append(pcm)
         return frame
+
 
 
 def main():
@@ -77,9 +83,11 @@ def main():
             key="voice",
             mode=WebRtcMode.SENDRECV,
             audio_processor_factory=AudioRecorder,
+            async_processing=True,  # Enable this
             rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
             media_stream_constraints={"audio": True, "video": False},
         )
+
         st.session_state.ctx = ctx
 
     # Process after stop
@@ -91,13 +99,31 @@ def main():
             temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
 
             # Stack frames along time axis → shape: (samples, 1)
-            stacked_frames = np.concatenate(processor.frames, axis=0)
+            # (1, samples) → flatten to (samples,)
+            stacked = np.concatenate(processor.frames, axis=1).flatten()
 
-            if stacked_frames.dtype != np.int16:
-                stacked_frames = (stacked_frames * 32767).astype(np.int16)
+            # Normalize volume
+            stacked = (stacked / np.max(np.abs(stacked))) * 32767
+            stacked = stacked.astype(np.int16)
 
-            sf.write(temp_wav.name, stacked_frames, samplerate=processor.sample_rate, subtype='PCM_16')
+            sf.write(temp_wav.name, stacked, samplerate=processor.sample_rate, subtype='PCM_16')
             logging.info(f"✅ Audio saved to {temp_wav.name}")
+
+            st.audio(temp_wav.name, format="audio/wav")
+            shutil.copy(temp_wav.name, f"debug_audio/{time.time()}.wav")
+
+            # Add this after saving the WAV file
+
+            def log_audio_details(filepath):
+                with wave.open(filepath, 'rb') as wf:
+                    logging.info(f"📊 Channels: {wf.getnchannels()}")
+                    logging.info(f"📊 Sample Width: {wf.getsampwidth()}")
+                    logging.info(f"📊 Frame Rate: {wf.getframerate()}")
+                    logging.info(f"📊 Frame Count: {wf.getnframes()}")
+                    logging.info(f"📊 Duration: {wf.getnframes() / wf.getframerate():.2f} seconds")
+
+            log_audio_details(temp_wav.name)
+
 
             # ---------------- Whisper Transcription ----------------
             logging.info("🔠 Transcribing with Whisper...")
