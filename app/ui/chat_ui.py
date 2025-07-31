@@ -4,10 +4,7 @@ import av
 import numpy as np
 import soundfile as sf
 import tempfile
-import uuid
-import os
 import logging
-
 from app.core.stt import transcribe_audio
 from app.core.tts import speak
 from app.core.action_handler import perform_action
@@ -15,7 +12,7 @@ from app.core.action_handler import perform_action
 logging.basicConfig(level=logging.INFO)
 st.set_page_config(page_title="TaskyAI Voice", layout="centered")
 
-# --- SESSION STATE ---
+# --- SESSION STATE INIT ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "recording" not in st.session_state:
@@ -26,7 +23,10 @@ if "groq_api_key" not in st.session_state:
     st.session_state.groq_api_key = ""
 if "auto_tts_enabled" not in st.session_state:
     st.session_state.auto_tts_enabled = True
-
+if "current_index" not in st.session_state:
+    st.session_state.current_index = 0  # index of current chat pair being shown
+if "awaiting_response" not in st.session_state:
+    st.session_state.awaiting_response = False
 
 # --- AUDIO RECORDER ---
 class AudioRecorder(AudioProcessorBase):
@@ -40,27 +40,8 @@ class AudioRecorder(AudioProcessorBase):
         self.frames.append(pcm.T)
         return frame
 
-
 # --- MAIN UI ---
 def main():
-
-    # Initialize session state variables at the top
-    if "groq_api_key" not in st.session_state:
-        st.session_state.groq_api_key = ""
-
-    if "text_input" not in st.session_state:
-        st.session_state.text_input = ""
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    if "mic_enabled" not in st.session_state:
-        st.session_state.mic_enabled = True
-
-    if "tts_enabled" not in st.session_state:
-        st.session_state.tts_enabled = True
-
-
     st.title("🎙️ TaskyAI Voice Assistant")
 
     # API Key
@@ -75,28 +56,44 @@ def main():
         st.warning("API key required to continue.")
         return
 
-    # Toggle for TTS Output
+    # Voice Output toggle
     st.toggle("🔊 Enable Voice Output", key="auto_tts_enabled", value=True)
 
-    # --- TEXT OR VOICE INPUT BOX ---
+    # --- Chat Display (Latest Pair) ---
+    if len(st.session_state.messages) >= 2:
+        i = st.session_state.current_index * 2
+        if len(st.session_state.messages) > i + 1:
+            user_msg = st.session_state.messages[i]
+            bot_msg = st.session_state.messages[i + 1]
+
+            st.markdown("## 🧾 Conversation")
+            with st.container():
+                st.markdown(f"<div style='background-color:#e6f7ff; color:#000000; padding:10px; border-radius:10px;'><b>🧑 You:</b><br>{user_msg['content']}</div>", unsafe_allow_html=True)
+                if user_msg.get("audio"):
+                    st.audio(user_msg["audio"], format="audio/wav")
+
+                st.markdown("""
+                    <hr style='border:1px solid #ccc;'>
+                """, unsafe_allow_html=True)
+
+                st.markdown(f"<div style='background-color:#f9f0ff; color:#000000; padding:10px; border-radius:10px;'><b>🤖 Assistant:</b><br>{bot_msg['content']}</div>", unsafe_allow_html=True)
+                if st.session_state.current_index == (len(st.session_state.messages) // 2 - 1) and bot_msg.get("audio") and st.session_state.auto_tts_enabled:
+                    st.audio(bot_msg["audio"], format="audio/mp3")
+
+    # --- Input Section: Always Visible ---
     col1, col2 = st.columns([4, 1])
     with col1:
-        user_text = st.text_input("💬 Type your message")
-
+        user_text = st.text_input("💬 Type your message", key="text_input")
         if st.button("Send"):
             if user_text.strip():
-                transcript = user_text.strip()
-                st.session_state.messages.append({
-                    "role": "user",
-                    "content": transcript,
-                    "audio": None
-                })
-                st.session_state.text_input = ""  # Only reset after submission
+                append_user_message(user_text.strip(), None)
+                st.session_state.awaiting_response = True
+                st.rerun()
 
     with col2:
         record = st.toggle("🎙️ Mic", key="recording")
 
-    # --- WebRTC Recording ---
+    # Audio Recording Logic
     if record:
         ctx = webrtc_streamer(
             key="voice",
@@ -107,7 +104,6 @@ def main():
         )
         st.session_state.ctx = ctx
 
-    # --- PROCESS AUDIO AFTER STOP ---
     if not record and "ctx" in st.session_state and st.session_state.ctx:
         ctx = st.session_state.ctx
         processor = ctx.audio_processor
@@ -115,41 +111,30 @@ def main():
             audio_file = save_audio(processor)
             transcript = transcribe_audio(audio_file)
             append_user_message(transcript, audio_file)
-            get_bot_response(transcript)
+            st.session_state.awaiting_response = True
+            st.rerun()
 
-    # --- PROCESS TEXT INPUT ---
-    if user_text:
-        append_user_message(user_text, None)
-        get_bot_response(user_text)
-        st.session_state.text_input = ""
+    # --- Awaiting Response: Show spinner and get answer ---
+    if st.session_state.awaiting_response:
+        with st.spinner("🤖 Thinking..."):
+            user_msg = st.session_state.messages[-1]
+            response = perform_action(user_msg['content'], api_key=st.session_state.groq_api_key)
+            audio_path = speak(response) if st.session_state.auto_tts_enabled else None
+            st.session_state.messages.append({"role": "assistant", "content": response, "audio": audio_path})
+            st.session_state.awaiting_response = False
+            st.session_state.current_index = len(st.session_state.messages) // 2 - 1
+            st.rerun()
 
-    # --- CHAT DISPLAY ---
-    st.markdown("### 🧾 Conversation")
-    for msg in st.session_state.messages:
-        print("\n\n--- Message ---")
-        print(type(msg))
-        print(msg)  # Debugging line to see message structure
-        print(msg["role"], msg["content"])
-        align = "flex-start" if msg["role"] == "user" else "flex-end"
-        bg_color = "#e6f7ff" if msg["role"] == "user" else "#f9f0ff"
-        with st.container():
-            st.markdown(
-                f"""
-                <div style='background-color: {bg_color}; padding: 10px; border-radius: 10px; margin: 5px 0; text-align: left; max-width: 80%; align-self: {align};'>
-                    <b>{'🧑 You' if msg["role"] == "user" else '🤖 Assistant'}</b><br>
-                    {msg["content"]}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-            if msg.get("audio") and msg["role"] == "user":
-                st.audio(msg["audio"], format="audio/wav")
-            if msg.get("audio") and msg["role"] == "assistant" and st.session_state.auto_tts_enabled:
-                st.audio(msg["audio"], format="audio/mp3", start_time=0)
-
+    # --- Navigation Buttons ---
+    left, center, right = st.columns([1, 5, 1])
+    with left:
+        if st.button("⬅️", disabled=st.session_state.current_index == 0):
+            st.session_state.current_index -= 1
+    with right:
+        if st.button("➡️", disabled=(st.session_state.current_index + 1) * 2 >= len(st.session_state.messages)):
+            st.session_state.current_index += 1
 
 # --- HELPER FUNCTIONS ---
-
 def save_audio(processor) -> str:
     temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
     audio_data = np.concatenate(processor.frames, axis=0)
@@ -159,25 +144,7 @@ def save_audio(processor) -> str:
     logging.info(f"✅ Audio saved to {temp_wav.name}")
     return temp_wav.name
 
-
 def append_user_message(text: str, audio_path: str):
-    st.session_state.messages.append({
-        "role": "user",
-        "content": text,
-        "audio": audio_path
-    })
+    st.session_state.messages.append({"role": "user", "content": text, "audio": audio_path})
 
 
-def get_bot_response(prompt: str):
-    response = perform_action(prompt, api_key=st.session_state.groq_api_key)
-    audio_path = speak(response) if st.session_state.auto_tts_enabled else None
-    st.session_state.messages.append({
-        "role": "assistant",
-        "content": response,
-        "audio": audio_path
-    })
-
-
-# --- ENTRY POINT ---
-if __name__ == "__main__":
-    main()
